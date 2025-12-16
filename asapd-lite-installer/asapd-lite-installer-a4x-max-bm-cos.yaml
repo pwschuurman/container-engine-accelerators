@@ -32,51 +32,10 @@ spec:
       tolerations:
       - operator: Exists
 
-      # Use the host's network namespace. This is essential for managing the
-      # host's CX PFs.
-      hostNetwork: true
-
       containers:
       - name: asapd-lite
-        image: us-docker.pkg.dev/gce-ai-infra/asapd-lite/asapd-lite:v0.0.1
-
-        command: ["/bin/bash", "-c"]
-        args:
-          - |
-            set -x
-            echo "Copying ipam binary to host persistent storage..."
-            cp -f /usr/local/sbin/ipam /var/lib/google/asapd-lite/ipam
-            if [ $? -ne 0 ]; then
-              echo "Error: Failed to copy ipam binary. Exiting."
-              exit 1
-            fi
-            echo "ipam binary copied successfully. Starting controller..."
-            /asapd-lite/controller/asapd-lite-controller &
-
-            # Wait for a bit to let interfaces come up.
-            sleep 15
-
-            DADFAILED_FOUND=0
-            INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep 'gpu')
-
-            for iface in $INTERFACES; do
-              if ip -6 addr show dev "$iface" | grep -q 'dadfailed'; then
-                echo "Found dadfailed on interface $iface. Bringing it down and up."
-                ip link set dev "$iface" down
-                ip link set dev "$iface" up
-                DADFAILED_FOUND=1
-              fi
-            done
-
-            if [ "$DADFAILED_FOUND" -eq 1 ]; then
-              echo "Found and attempted to fix dadfailed on one or more interfaces. Exiting to allow container restart."
-              exit 1
-            fi
-
-            # Keep the container running
-            echo "No dadfailed detected on interfaces."
-            wait
-
+        image: us-docker.pkg.dev/gce-ai-infra/asapd-lite/asapd-lite:v0.0.2
+        command: ["/usr/local/bin/run_asapd_lite.sh"]
         env:
         - name: LD_LIBRARY_PATH
           value: /asapd-lite/controller
@@ -84,7 +43,7 @@ spec:
           httpGet:
             path: /healthz
             port: 19540
-          initialDelaySeconds: 60
+          initialDelaySeconds: 15
         readinessProbe:
           httpGet:
             path: /healthz
@@ -112,6 +71,10 @@ spec:
           mountPath: /var/log/google/asapd-lite
         - name: var-lib-google-asapd-lite
           mountPath: /var/lib/google/asapd-lite
+        - name: host-systemd-system
+          mountPath: /etc/systemd/system
+        - name: host-run-systemd
+          mountPath: /run/systemd
         resources:
           limits:
             hugepages-2Mi: 8192Mi
@@ -151,6 +114,12 @@ spec:
         hostPath:
           path: /var/lib/google/asapd-lite
           type: DirectoryOrCreate
+      - name: host-systemd-system
+        hostPath:
+          path: /etc/systemd/system
+      - name: host-run-systemd
+        hostPath:
+          path: /run/systemd
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
